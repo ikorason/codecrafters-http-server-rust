@@ -25,11 +25,23 @@ fn handle_connection(mut stream: TcpStream) {
     let buf_reader = BufReader::new(&stream);
     let request_line = buf_reader.lines().next().unwrap().unwrap();
 
-    if request_line == "GET / HTTP/1.1" {
-        let status_line = "HTTP/1.1 200 OK\r\n\r\n";
-        stream.write_all(status_line.as_bytes()).unwrap();
-    } else {
-        let status_line = "HTTP/1.1 404 Not Found\r\n\r\n";
-        stream.write_all(status_line.as_bytes()).unwrap();
+    if let Some(path) = request_line.split_whitespace().nth(1) {
+        if path == "/" {
+            stream
+                .write_all("HTTP/1.1 200 OK\r\n\r\n".as_bytes())
+                .unwrap();
+        } else if let Some(echo_str) = path.strip_prefix("/echo/") {
+            let status_line = "HTTP/1.1 200 OK";
+            let content_type = "text/plain";
+            let content_length = 3;
+            let response = format!(
+                "{status_line}\r\nContent-Type: {content_type}\r\nContent-Length: {content_length}\r\n\r\n{echo_str}"
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        } else {
+            stream
+                .write_all("HTTP/1.1 404 Not Found\r\n\r\n".as_bytes())
+                .unwrap();
+        }
     }
 }
