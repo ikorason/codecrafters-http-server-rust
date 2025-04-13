@@ -33,7 +33,7 @@ fn handle_connection(mut stream: TcpStream) {
         } else if let Some(echo_str) = path.strip_prefix("/echo/") {
             let status_line = "HTTP/1.1 200 OK";
             let content_type = "text/plain";
-            let content_length = 3;
+            let content_length = echo_str.len();
             let response = format!(
                 "{status_line}\r\nContent-Type: {content_type}\r\nContent-Length: {content_length}\r\n\r\n{echo_str}"
             );
