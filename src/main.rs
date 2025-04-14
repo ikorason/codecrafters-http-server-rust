@@ -40,13 +40,14 @@ fn parse_and_generate_response(stream: &TcpStream) -> Option<String> {
         Some(String::from("HTTP/1.1 200 OK\r\n\r\n"))
     } else if let Some(echo_str) = path.strip_prefix("/echo/") {
         Some(format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n",
-            echo_str.len()
+            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
+            echo_str.len(),
+            echo_str,
         ))
     } else if path == "/user-agent" {
         let user_agent = headers.get("User-Agent").unwrap();
         Some(format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n{}",
+            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
             user_agent.len(),
             user_agent,
         ))
