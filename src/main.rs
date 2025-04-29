@@ -55,11 +55,21 @@ fn parse_and_generate_response(stream: &TcpStream, base_dir: Option<PathBuf>) ->
             if path == "/" {
                 Some(String::from("HTTP/1.1 200 OK\r\n\r\n"))
             } else if let Some(echo_str) = path.strip_prefix("/echo/") {
-                Some(format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
-                    echo_str.len(),
-                    echo_str,
-                ))
+                let response_body = echo_str.as_bytes().to_vec();
+                let mut response_headers =
+                    String::from("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n");
+
+                if let Some(accept_encoding) = headers.get("Accept-Encoding") {
+                    if accept_encoding == "gzip" {
+                        response_headers.push_str("Content-Encoding: gzip\r\n");
+                    }
+                }
+
+                response_headers
+                    .push_str(&format!("Content-Length: {}\r\n\r\n", response_body.len()));
+                let response = [response_headers.as_bytes(), &response_body].concat();
+
+                Some(String::from_utf8(response).unwrap())
             } else if let Some(file_path) = path.strip_prefix("/files/") {
                 // disallow directory traversal
                 if file_path.contains("..") {
