@@ -1,32 +1,47 @@
 use std::{
     collections::HashMap,
-    fs,
+    env, fs,
     io::{BufRead, BufReader, Write},
     net::{TcpListener, TcpStream},
-    path::Path,
+    path::PathBuf,
     thread,
 };
 
 fn main() {
+    let mut args = env::args();
+    let _program = args.next();
+
+    let mut base_dir = None;
+    while let Some(arg) = args.next() {
+        if arg == "--directory" {
+            if let Some(path) = args.next() {
+                base_dir = Some(PathBuf::from(path));
+            }
+        }
+    }
+
+    let base_dir = base_dir.expect("Missing --directory");
+
     let listener = TcpListener::bind("127.0.0.1:4221").unwrap();
 
     for stream in listener.incoming() {
         let stream = stream.unwrap();
+        let base_dir = base_dir.clone();
 
         thread::spawn(move || {
-            handle_connection(stream);
+            handle_connection(stream, base_dir);
         });
     }
 }
 
-fn handle_connection(mut stream: TcpStream) {
-    if let Some(response) = parse_and_generate_response(&stream) {
+fn handle_connection(mut stream: TcpStream, base_dir: PathBuf) {
+    if let Some(response) = parse_and_generate_response(&stream, base_dir) {
         stream.write_all(response.as_bytes()).unwrap();
         stream.flush().unwrap();
     }
 }
 
-fn parse_and_generate_response(stream: &TcpStream) -> Option<String> {
+fn parse_and_generate_response(stream: &TcpStream, base_dir: PathBuf) -> Option<String> {
     let (request_line, headers) = parse_request(stream);
 
     let parts: Vec<&str> = request_line.split_whitespace().collect();
@@ -45,14 +60,12 @@ fn parse_and_generate_response(stream: &TcpStream) -> Option<String> {
             echo_str,
         ))
     } else if let Some(file_path) = path.strip_prefix("/files/") {
-        let base = Path::new("/tmp");
-
         // disallow directory traversal
         if file_path.contains("..") {
             return Some("HTTP/1.1 400 Bad Request\r\n\r\n".to_string());
         }
 
-        let full_path = base.join(file_path);
+        let full_path = base_dir.join(file_path);
 
         // Canonicalize the path to resolve any symlinks and ensure it stays within /tmp
         match full_path.canonicalize() {
