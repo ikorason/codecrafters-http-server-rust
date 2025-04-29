@@ -112,7 +112,7 @@ fn parse_and_generate_response(stream: &TcpStream, base_dir: Option<PathBuf>) ->
 
                 fs::write(file_path, &body).unwrap();
 
-                Some(String::from("HTTP/1.1 200 Created\r\n\r\n"))
+                Some(String::from("HTTP/1.1 201 Created\r\n\r\n"))
             } else {
                 Some(String::from("HTTP/1.1 404 Not Found\r\n\r\n"))
             }
