@@ -110,9 +110,23 @@ fn parse_and_generate_response(stream: &TcpStream, base_dir: Option<PathBuf>) ->
                 let mut body = vec![0; content_length];
                 reader.read_exact(&mut body).unwrap();
 
-                fs::write(file_path, &body).unwrap();
+                // disallow directory traversal
+                if file_path.contains("..") {
+                    return Some("HTTP/1.1 400 Bad Request\r\n\r\n".to_string());
+                }
 
-                Some(String::from("HTTP/1.1 201 Created\r\n\r\n"))
+                // reject if --directory is not provided
+                let base_dir = match base_dir {
+                    Some(dir) => dir,
+                    None => return Some("HTTP/1.1 500 Internal Server Error\r\n\r\n".to_string()),
+                };
+
+                let full_path = base_dir.join(file_path);
+
+                match fs::write(&full_path, &body) {
+                    Ok(_) => Some(String::from("HTTP/1.1 201 Created\r\n\r\n")),
+                    Err(_) => Some(String::from("HTTP/1.1 500 Internal Server Error\r\n\r\n")),
+                }
             } else {
                 Some(String::from("HTTP/1.1 404 Not Found\r\n\r\n"))
             }
