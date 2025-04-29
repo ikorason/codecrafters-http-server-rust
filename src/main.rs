@@ -55,12 +55,22 @@ fn parse_and_generate_response(stream: &TcpStream, base_dir: Option<PathBuf>) ->
             if path == "/" {
                 Some(String::from("HTTP/1.1 200 OK\r\n\r\n"))
             } else if let Some(echo_str) = path.strip_prefix("/echo/") {
+                let mut encoding_is_gzip = false;
+
                 let response_body = echo_str.as_bytes().to_vec();
                 let mut response_headers =
                     String::from("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n");
 
                 if let Some(accept_encoding) = headers.get("Accept-Encoding") {
-                    if accept_encoding == "gzip" {
+                    for encoding in accept_encoding.split(',') {
+                        let encoding = encoding.trim();
+                        if encoding == "gzip" {
+                            encoding_is_gzip = true;
+                            break;
+                        }
+                    }
+
+                    if encoding_is_gzip {
                         response_headers.push_str("Content-Encoding: gzip\r\n");
                     }
                 }
