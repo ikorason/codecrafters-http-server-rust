@@ -1,7 +1,9 @@
 use std::{
     collections::HashMap,
+    fs,
     io::{BufRead, BufReader, Write},
     net::{TcpListener, TcpStream},
+    path::Path,
     thread,
 };
 
@@ -42,6 +44,31 @@ fn parse_and_generate_response(stream: &TcpStream) -> Option<String> {
             echo_str.len(),
             echo_str,
         ))
+    } else if let Some(file_path) = path.strip_prefix("/files/") {
+        let base = Path::new("/tmp");
+
+        // disallow directory traversal
+        if file_path.contains("..") {
+            return Some("HTTP/1.1 400 Bad Request\r\n\r\n".to_string());
+        }
+
+        let full_path = base.join(file_path);
+
+        // Canonicalize the path to resolve any symlinks and ensure it stays within /tmp
+        match full_path.canonicalize() {
+            Ok(resolved_path) => {
+                // try reading the file
+                match fs::read_to_string(&resolved_path) {
+                    Ok(content) => Some(format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n{}",
+                        content.len(),
+                        content,
+                    )),
+                    Err(_) => Some(String::from("HTTP/1.1 404 Not Found\r\n\r\n")),
+                }
+            }
+            Err(_) => Some(String::from("HTTP/1.1 404 Not Found\r\n\r\n")),
+        }
     } else if path == "/user-agent" {
         let user_agent = headers.get("User-Agent").unwrap();
         Some(format!(
