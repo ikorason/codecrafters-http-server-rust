@@ -20,8 +20,6 @@ fn main() {
         }
     }
 
-    let base_dir = base_dir.expect("Missing --directory");
-
     let listener = TcpListener::bind("127.0.0.1:4221").unwrap();
 
     for stream in listener.incoming() {
@@ -34,14 +32,14 @@ fn main() {
     }
 }
 
-fn handle_connection(mut stream: TcpStream, base_dir: PathBuf) {
+fn handle_connection(mut stream: TcpStream, base_dir: Option<PathBuf>) {
     if let Some(response) = parse_and_generate_response(&stream, base_dir) {
         stream.write_all(response.as_bytes()).unwrap();
         stream.flush().unwrap();
     }
 }
 
-fn parse_and_generate_response(stream: &TcpStream, base_dir: PathBuf) -> Option<String> {
+fn parse_and_generate_response(stream: &TcpStream, base_dir: Option<PathBuf>) -> Option<String> {
     let (request_line, headers) = parse_request(stream);
 
     let parts: Vec<&str> = request_line.split_whitespace().collect();
@@ -64,6 +62,12 @@ fn parse_and_generate_response(stream: &TcpStream, base_dir: PathBuf) -> Option<
         if file_path.contains("..") {
             return Some("HTTP/1.1 400 Bad Request\r\n\r\n".to_string());
         }
+
+        // reject if --directory is not provided
+        let base_dir = match base_dir {
+            Some(dir) => dir,
+            None => return Some("HTTP/1.1 500 Internal Server Error\r\n\r\n".to_string()),
+        };
 
         let full_path = base_dir.join(file_path);
 
