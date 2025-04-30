@@ -100,6 +100,10 @@ fn parse_and_generate_response(
                     }
                 }
 
+                if connection_should_close {
+                    response_headers.push_str("Connection: close\r\n");
+                }
+
                 response_headers
                     .push_str(&format!("Content-Length: {}\r\n\r\n", response_body.len()));
 
