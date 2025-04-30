@@ -35,23 +35,32 @@ fn main() {
 }
 
 fn handle_connection(mut stream: TcpStream, base_dir: Option<PathBuf>) {
-    while let Some(response) = parse_and_generate_response(&mut stream, base_dir.clone()) {
+    while let Some((response, action)) = parse_and_generate_response(&mut stream, base_dir.clone())
+    {
         stream.write_all(&response).unwrap();
         stream.flush().unwrap();
+
+        if let ConnectionAction::Close = action {
+            break;
+        }
     }
+}
+
+enum ConnectionAction {
+    KeepAlive,
+    Close,
 }
 
 fn parse_and_generate_response(
     stream: &mut TcpStream,
     base_dir: Option<PathBuf>,
-) -> Option<Vec<u8>> {
+) -> Option<(Vec<u8>, ConnectionAction)> {
     let (request_line, headers, mut reader) = parse_request(stream);
 
-    if let Some(conn) = headers.get("Connection") {
-        if conn.eq_ignore_ascii_case("close") {
-            return None;
-        }
-    }
+    let connection_should_close = headers
+        .get("Connection")
+        .map(|val| val.trim().eq_ignore_ascii_case("close"))
+        .unwrap_or(false);
 
     let parts: Vec<&str> = request_line.split_whitespace().collect();
     if parts.len() < 2 {
@@ -64,7 +73,14 @@ fn parse_and_generate_response(
     match method {
         "GET" => {
             if path == "/" {
-                return Some(b"HTTP/1.1 200 OK\r\n\r\n".to_vec());
+                return Some((
+                    b"HTTP/1.1 200 OK\r\n\r\n".to_vec(),
+                    if connection_should_close {
+                        ConnectionAction::Close
+                    } else {
+                        ConnectionAction::KeepAlive
+                    },
+                ));
             }
 
             if let Some(echo_str) = path.strip_prefix("/echo/") {
@@ -89,12 +105,27 @@ fn parse_and_generate_response(
 
                 let mut response = response_headers.into_bytes();
                 response.extend_from_slice(&response_body);
-                return Some(response);
+
+                return Some((
+                    response,
+                    if connection_should_close {
+                        ConnectionAction::Close
+                    } else {
+                        ConnectionAction::KeepAlive
+                    },
+                ));
             }
 
             if let Some(file_path) = path.strip_prefix("/files/") {
                 if file_path.contains("..") {
-                    return Some(b"HTTP/1.1 400 Bad Request\r\n\r\n".to_vec());
+                    return Some((
+                        b"HTTP/1.1 400 Bad Request\r\n\r\n".to_vec(),
+                        if connection_should_close {
+                            ConnectionAction::Close
+                        } else {
+                            ConnectionAction::KeepAlive
+                        },
+                    ));
                 }
 
                 let base_dir = base_dir?;
@@ -109,11 +140,33 @@ fn parse_and_generate_response(
                                 )
                                 .into_bytes();
                             headers.extend_from_slice(&content);
-                            Some(headers)
+
+                            Some((
+                                headers,
+                                if connection_should_close {
+                                    ConnectionAction::Close
+                                } else {
+                                    ConnectionAction::KeepAlive
+                                },
+                            ))
                         }
-                        Err(_) => Some(b"HTTP/1.1 404 Not Found\r\n\r\n".to_vec()),
+                        Err(_) => Some((
+                            b"HTTP/1.1 404 Not Found\r\n\r\n".to_vec(),
+                            if connection_should_close {
+                                ConnectionAction::Close
+                            } else {
+                                ConnectionAction::KeepAlive
+                            },
+                        )),
                     },
-                    Err(_) => Some(b"HTTP/1.1 404 Not Found\r\n\r\n".to_vec()),
+                    Err(_) => Some((
+                        b"HTTP/1.1 404 Not Found\r\n\r\n".to_vec(),
+                        if connection_should_close {
+                            ConnectionAction::Close
+                        } else {
+                            ConnectionAction::KeepAlive
+                        },
+                    )),
                 }
             } else if path == "/user-agent" {
                 if let Some(user_agent) = headers.get("User-Agent") {
@@ -124,12 +177,33 @@ fn parse_and_generate_response(
                     )
                     .into_bytes();
                     response.extend_from_slice(body);
-                    Some(response)
+                    Some((
+                        response,
+                        if connection_should_close {
+                            ConnectionAction::Close
+                        } else {
+                            ConnectionAction::KeepAlive
+                        },
+                    ))
                 } else {
-                    Some(b"HTTP/1.1 400 Bad Request\r\n\r\n".to_vec())
+                    Some((
+                        b"HTTP/1.1 400 Bad Request\r\n\r\n".to_vec(),
+                        if connection_should_close {
+                            ConnectionAction::Close
+                        } else {
+                            ConnectionAction::KeepAlive
+                        },
+                    ))
                 }
             } else {
-                Some(b"HTTP/1.1 404 Not Found\r\n\r\n".to_vec())
+                Some((
+                    b"HTTP/1.1 404 Not Found\r\n\r\n".to_vec(),
+                    if connection_should_close {
+                        ConnectionAction::Close
+                    } else {
+                        ConnectionAction::KeepAlive
+                    },
+                ))
             }
         }
         "POST" => {
@@ -143,21 +217,56 @@ fn parse_and_generate_response(
                 reader.read_exact(&mut body).unwrap();
 
                 if file_path.contains("..") {
-                    return Some(b"HTTP/1.1 400 Bad Request\r\n\r\n".to_vec());
+                    return Some((
+                        b"HTTP/1.1 400 Bad Request\r\n\r\n".to_vec(),
+                        if connection_should_close {
+                            ConnectionAction::Close
+                        } else {
+                            ConnectionAction::KeepAlive
+                        },
+                    ));
                 }
 
                 let base_dir = base_dir?;
                 let full_path = base_dir.join(file_path);
 
                 match fs::write(&full_path, &body) {
-                    Ok(_) => Some(b"HTTP/1.1 201 Created\r\n\r\n".to_vec()),
-                    Err(_) => Some(b"HTTP/1.1 500 Internal Server Error\r\n\r\n".to_vec()),
+                    Ok(_) => Some((
+                        b"HTTP/1.1 201 Created\r\n\r\n".to_vec(),
+                        if connection_should_close {
+                            ConnectionAction::Close
+                        } else {
+                            ConnectionAction::KeepAlive
+                        },
+                    )),
+                    Err(_) => Some((
+                        b"HTTP/1.1 500 Internal Server Error\r\n\r\n".to_vec(),
+                        if connection_should_close {
+                            ConnectionAction::Close
+                        } else {
+                            ConnectionAction::KeepAlive
+                        },
+                    )),
                 }
             } else {
-                Some(b"HTTP/1.1 404 Not Found\r\n\r\n".to_vec())
+                Some((
+                    b"HTTP/1.1 404 Not Found\r\n\r\n".to_vec(),
+                    if connection_should_close {
+                        ConnectionAction::Close
+                    } else {
+                        ConnectionAction::KeepAlive
+                    },
+                ))
             }
         }
-        _ => Some(b"HTTP/1.1 405 Method Not Allowed\r\n\r\n".to_vec()),
+        _ => Some((
+            b"HTTP/1.1 405 Method Not Allowed\r\n\r\n".to_vec(),
+            if connection_should_close {
+                ConnectionAction::Close
+            } else {
+                ConnectionAction::KeepAlive
+            },
+        )),
     }
 }
 
