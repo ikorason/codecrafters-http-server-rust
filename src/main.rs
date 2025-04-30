@@ -35,14 +35,23 @@ fn main() {
 }
 
 fn handle_connection(mut stream: TcpStream, base_dir: Option<PathBuf>) {
-    if let Some(response) = parse_and_generate_response(&stream, base_dir) {
+    while let Some(response) = parse_and_generate_response(&mut stream, base_dir.clone()) {
         stream.write_all(&response).unwrap();
         stream.flush().unwrap();
     }
 }
 
-fn parse_and_generate_response(stream: &TcpStream, base_dir: Option<PathBuf>) -> Option<Vec<u8>> {
+fn parse_and_generate_response(
+    stream: &mut TcpStream,
+    base_dir: Option<PathBuf>,
+) -> Option<Vec<u8>> {
     let (request_line, headers, mut reader) = parse_request(stream);
+
+    if let Some(conn) = headers.get("Connection") {
+        if conn.eq_ignore_ascii_case("close") {
+            return None;
+        }
+    }
 
     let parts: Vec<&str> = request_line.split_whitespace().collect();
     if parts.len() < 2 {
