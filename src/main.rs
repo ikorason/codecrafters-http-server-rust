@@ -7,6 +7,8 @@ use std::{
     thread,
 };
 
+use flate2::{write::GzEncoder, Compression};
+
 fn main() {
     let mut args = env::args();
     let _program = args.next();
@@ -34,12 +36,12 @@ fn main() {
 
 fn handle_connection(mut stream: TcpStream, base_dir: Option<PathBuf>) {
     if let Some(response) = parse_and_generate_response(&stream, base_dir) {
-        stream.write_all(response.as_bytes()).unwrap();
+        stream.write_all(&response).unwrap();
         stream.flush().unwrap();
     }
 }
 
-fn parse_and_generate_response(stream: &TcpStream, base_dir: Option<PathBuf>) -> Option<String> {
+fn parse_and_generate_response(stream: &TcpStream, base_dir: Option<PathBuf>) -> Option<Vec<u8>> {
     let (request_line, headers, mut reader) = parse_request(stream);
 
     let parts: Vec<&str> = request_line.split_whitespace().collect();
@@ -53,71 +55,72 @@ fn parse_and_generate_response(stream: &TcpStream, base_dir: Option<PathBuf>) ->
     match method {
         "GET" => {
             if path == "/" {
-                Some(String::from("HTTP/1.1 200 OK\r\n\r\n"))
-            } else if let Some(echo_str) = path.strip_prefix("/echo/") {
-                let mut encoding_is_gzip = false;
+                return Some(b"HTTP/1.1 200 OK\r\n\r\n".to_vec());
+            }
 
-                let response_body = echo_str.as_bytes().to_vec();
+            if let Some(echo_str) = path.strip_prefix("/echo/") {
+                let mut response_body = echo_str.as_bytes().to_vec();
                 let mut response_headers =
                     String::from("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n");
 
                 if let Some(accept_encoding) = headers.get("Accept-Encoding") {
-                    for encoding in accept_encoding.split(',') {
-                        let encoding = encoding.trim();
-                        if encoding == "gzip" {
-                            encoding_is_gzip = true;
-                            break;
-                        }
-                    }
+                    let encoding_is_gzip =
+                        accept_encoding.split(',').any(|enc| enc.trim() == "gzip");
 
                     if encoding_is_gzip {
+                        let mut encoder = GzEncoder::new(vec![], Compression::default());
+                        encoder.write_all(&response_body).unwrap();
+                        response_body = encoder.finish().unwrap();
                         response_headers.push_str("Content-Encoding: gzip\r\n");
                     }
                 }
 
                 response_headers
                     .push_str(&format!("Content-Length: {}\r\n\r\n", response_body.len()));
-                let response = [response_headers.as_bytes(), &response_body].concat();
 
-                Some(String::from_utf8(response).unwrap())
-            } else if let Some(file_path) = path.strip_prefix("/files/") {
-                // disallow directory traversal
+                let mut response = response_headers.into_bytes();
+                response.extend_from_slice(&response_body);
+                return Some(response);
+            }
+
+            if let Some(file_path) = path.strip_prefix("/files/") {
                 if file_path.contains("..") {
-                    return Some("HTTP/1.1 400 Bad Request\r\n\r\n".to_string());
+                    return Some(b"HTTP/1.1 400 Bad Request\r\n\r\n".to_vec());
                 }
 
-                // reject if --directory is not provided
-                let base_dir = match base_dir {
-                    Some(dir) => dir,
-                    None => return Some("HTTP/1.1 500 Internal Server Error\r\n\r\n".to_string()),
-                };
-
+                let base_dir = base_dir?;
                 let full_path = base_dir.join(file_path);
 
-                // Canonicalize the path to resolve any symlinks and ensure it stays within /tmp
                 match full_path.canonicalize() {
-                    Ok(resolved_path) => {
-                        // try reading the file
-                        match fs::read_to_string(&resolved_path) {
-                            Ok(content) => Some(format!(
-                                "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n{}",
-                                content.len(),
-                                content,
-                            )),
-                            Err(_) => Some(String::from("HTTP/1.1 404 Not Found\r\n\r\n")),
+                    Ok(resolved_path) => match fs::read(&resolved_path) {
+                        Ok(content) => {
+                            let mut headers = format!(
+                                    "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n",
+                                    content.len()
+                                )
+                                .into_bytes();
+                            headers.extend_from_slice(&content);
+                            Some(headers)
                         }
-                    }
-                    Err(_) => Some(String::from("HTTP/1.1 404 Not Found\r\n\r\n")),
+                        Err(_) => Some(b"HTTP/1.1 404 Not Found\r\n\r\n".to_vec()),
+                    },
+                    Err(_) => Some(b"HTTP/1.1 404 Not Found\r\n\r\n".to_vec()),
                 }
             } else if path == "/user-agent" {
-                let user_agent = headers.get("User-Agent").unwrap();
-                Some(format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
-                    user_agent.len(),
-                    user_agent,
-                ))
+                if let Some(user_agent) = headers.get("User-Agent") {
+                    let body = user_agent.as_bytes();
+                    let mut response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n",
+                        body.len()
+                    )
+                    .into_bytes();
+                    response.extend_from_slice(body);
+                    Some(response)
+                } else {
+                    Some(b"HTTP/1.1 400 Bad Request\r\n\r\n".to_vec())
+                }
             } else {
-                Some(String::from("HTTP/1.1 404 Not Found\r\n\r\n"))
+                Some(b"HTTP/1.1 404 Not Found\r\n\r\n".to_vec())
             }
         }
         "POST" => {
@@ -130,28 +133,22 @@ fn parse_and_generate_response(stream: &TcpStream, base_dir: Option<PathBuf>) ->
                 let mut body = vec![0; content_length];
                 reader.read_exact(&mut body).unwrap();
 
-                // disallow directory traversal
                 if file_path.contains("..") {
-                    return Some("HTTP/1.1 400 Bad Request\r\n\r\n".to_string());
+                    return Some(b"HTTP/1.1 400 Bad Request\r\n\r\n".to_vec());
                 }
 
-                // reject if --directory is not provided
-                let base_dir = match base_dir {
-                    Some(dir) => dir,
-                    None => return Some("HTTP/1.1 500 Internal Server Error\r\n\r\n".to_string()),
-                };
-
+                let base_dir = base_dir?;
                 let full_path = base_dir.join(file_path);
 
                 match fs::write(&full_path, &body) {
-                    Ok(_) => Some(String::from("HTTP/1.1 201 Created\r\n\r\n")),
-                    Err(_) => Some(String::from("HTTP/1.1 500 Internal Server Error\r\n\r\n")),
+                    Ok(_) => Some(b"HTTP/1.1 201 Created\r\n\r\n".to_vec()),
+                    Err(_) => Some(b"HTTP/1.1 500 Internal Server Error\r\n\r\n".to_vec()),
                 }
             } else {
-                Some(String::from("HTTP/1.1 404 Not Found\r\n\r\n"))
+                Some(b"HTTP/1.1 404 Not Found\r\n\r\n".to_vec())
             }
         }
-        _ => Some(String::from("HTTP/1.1 405 Method Not Allowed\r\n\r\n")),
+        _ => Some(b"HTTP/1.1 405 Method Not Allowed\r\n\r\n".to_vec()),
     }
 }
 
